@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 仮想環境
+.venv/
+venv/
+env/
+
+# ローカル設定ファイル (個人の環境依存)
+launcher_tc.json
+
+# ログ
+*.log
+
+# Claude Code セッションデータ
+.claude/
+
+# Windows
+Thumbs.db
+desktop.ini
