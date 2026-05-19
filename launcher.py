@@ -1110,49 +1110,205 @@ class MultiRenameDialog(tk.Toplevel):
         else: messagebox.showinfo("完了", f"{len(self.files)}件完了")
         self.destroy()
 
-class HotlistDialog(tk.Toplevel):
-    def __init__(self, master, hotlist, callback):
+class HotlistMenu(tk.Toplevel):
+    """TC スタイルのホットリストポップアップ (overrideredirect)"""
+
+    def __init__(self, master, hotlist, cur_path, target_path, on_goto, on_save):
         super().__init__(master)
-        self.title("ディレクトリホットリスト (Ctrl+D)")
-        self.hotlist = hotlist; self.callback = callback
-        self._build(); self.grab_set()
+        self.overrideredirect(True)
+        self.hotlist  = hotlist
+        self.cur_path = Path(cur_path)
+        self.tgt_path = Path(target_path)
+        self.on_goto  = on_goto   # callable(path_str, target_str_or_None)
+        self.on_save  = on_save   # callable()
+        self._rows    = []        # list of (widget, key)  key=None → separator
+        self._sel     = 0
+        self._build()
+        self._position(master)
+        self.grab_set()
+        self.bind("<Up>",     lambda e: self._move(-1) or "break")
+        self.bind("<Down>",   lambda e: self._move(1)  or "break")
+        self.bind("<Return>", lambda e: self._activate() or "break")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.focus_set()
+
+    # ── UI 構築 ──────────────────────────────
+    def _build(self):
+        self.configure(bg=C["hdr_bg"], bd=1, relief="solid")
+        outer = tk.Frame(self, bg=C["panel_bg"]); outer.pack(fill="both", expand=True)
+
+        def item(text, key):
+            lbl = tk.Label(outer, text=f"  {text}  ", bg=C["panel_bg"], fg=C["panel_fg"],
+                           font=("Meiryo UI", 9), anchor="w", padx=2, pady=2)
+            lbl.pack(fill="x")
+            i = len(self._rows)
+            lbl.bind("<Button-1>", lambda e, i=i: self._click(i))
+            lbl.bind("<Enter>",    lambda e, i=i: self._hover(i))
+            self._rows.append((lbl, key))
+
+        def sep():
+            f = tk.Frame(outer, height=1, bg=C["hdr_bg"]); f.pack(fill="x", pady=1)
+            self._rows.append((f, None))
+
+        item("Add current dir", "ADD")
+        item("Configure...",    "CFG")
+        if self.hotlist:
+            sep()
+            for name in self.hotlist:
+                item(name, name)
+
+        self._highlight()
+
+    def _highlight(self):
+        for i, (w, key) in enumerate(self._rows):
+            if key is None: continue
+            w.config(bg=C["cursor_bg"] if i == self._sel else C["panel_bg"],
+                     fg=C["cursor_fg"] if i == self._sel else C["panel_fg"])
+
+    def _selectable(self):
+        return [i for i, (_, k) in enumerate(self._rows) if k is not None]
+
+    def _select(self, idx):
+        self._sel = idx; self._highlight()
+
+    def _hover(self, idx):
+        self._select(idx)
+
+    def _move(self, d):
+        idxs = self._selectable()
+        if not idxs: return
+        try: pos = idxs.index(self._sel)
+        except ValueError: pos = 0
+        self._select(idxs[(pos + d) % len(idxs)])
+
+    def _click(self, idx):
+        self._select(idx); self._activate()
+
+    def _activate(self):
+        if self._sel >= len(self._rows): return
+        _, key = self._rows[self._sel]
+        if key is None: return
+        if   key == "ADD": self._do_add()
+        elif key == "CFG": self._do_configure()
+        else:
+            val = self.hotlist.get(key)
+            if val is None: self.destroy(); return
+            path   = val.get("path", "")   if isinstance(val, dict) else str(val)
+            target = val.get("target", "") if isinstance(val, dict) else None
+            self.on_goto(path, target or None)
+            self.destroy()
+
+    # ── サブダイアログ ────────────────────────
+    def _do_add(self):
+        self.grab_release()
+        dlg = HotlistAddDialog(self.master, self.cur_path, self.tgt_path)
+        if dlg.result:
+            name, path, target = dlg.result
+            self.hotlist[name] = ({"path": str(path), "target": str(target)}
+                                  if target else str(path))
+            self.on_save()
+        self.destroy()
+
+    def _do_configure(self):
+        self.grab_release()
+        HotlistConfigDialog(self.master, self.hotlist, self.on_save)
+        self.destroy()
+
+    # ── 位置決め ──────────────────────────────
+    def _position(self, master):
+        self.update_idletasks()
+        try:
+            tree = master.ap.tree
+            x, y = tree.winfo_rootx(), tree.winfo_rooty()
+        except Exception:
+            x, y = master.winfo_rootx() + 10, master.winfo_rooty() + 60
+        w = self.winfo_reqwidth()
+        h = self.winfo_reqheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"+{min(x, sw-w-4)}+{min(y, sh-h-4)}")
+
+
+class HotlistAddDialog(_BaseDialog):
+    """Add current dir — 名前入力 + Also save the target dir チェック"""
+    def __init__(self, master, cur_path, target_path):
+        super().__init__(master, "New title for menu entry")
+        self.cur_path = cur_path; self.target_path = target_path
+
+        self.name_var = tk.StringVar(value=cur_path.name)
+        e = tk.Entry(self, textvariable=self.name_var, width=36, font=("Meiryo UI", 9))
+        e.pack(padx=12, pady=(10, 4), fill="x")
+        e.after(10, lambda: (e.focus_set(), e.selection_range(0, "end")))
+
+        self.also_tgt = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="Also save the target dir",
+                       variable=self.also_tgt, font=("Meiryo UI", 9)
+                       ).pack(padx=12, pady=4, anchor="w")
+
+        fr = tk.Frame(self); fr.pack(pady=8)
+        tk.Button(fr, text="OK",     width=10, command=self._ok).pack(side="left", padx=4)
+        tk.Button(fr, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=4)
+        self.bind("<Return>", lambda e: self._ok() or "break")
+        self.wait_window()
+
+    def _ok(self):
+        name = self.name_var.get().strip()
+        if not name: return
+        self.result = (name, self.cur_path,
+                       self.target_path if self.also_tgt.get() else None)
+        self.destroy()
+
+
+class HotlistConfigDialog(tk.Toplevel):
+    """Configure... — ホットリスト管理ダイアログ"""
+    def __init__(self, master, hotlist, on_save):
+        super().__init__(master)
+        self.title("ホットリスト設定 (Configure)")
+        self.hotlist = hotlist; self.on_save = on_save
+        self.grab_set()
+        self._build()
+        self.bind("<Escape>", lambda _: self.destroy())
+        self.wait_window()
 
     def _build(self):
-        self.listbox = tk.Listbox(self, font=("Meiryo UI", 9), height=12, width=50,
-            selectbackground=C["sel_bg"], selectforeground=C["sel_fg"])
-        self.listbox.pack(fill="both", expand=True, padx=8, pady=8)
+        fr = tk.Frame(self); fr.pack(fill="both", expand=True, padx=8, pady=8)
+        sb = tk.Scrollbar(fr); sb.pack(side="right", fill="y")
+        self.lb = tk.Listbox(fr, yscrollcommand=sb.set, font=("Meiryo UI", 9),
+                             width=58, height=14, selectmode="single",
+                             exportselection=False,
+                             selectbackground=C["cursor_bg"],
+                             selectforeground=C["cursor_fg"])
+        self.lb.pack(side="left", fill="both", expand=True)
+        sb.config(command=self.lb.yview)
         self._reload()
-        self.listbox.bind("<Double-Button-1>", self._go)
-        self.listbox.bind("<Return>", self._go)
+
+        def _sync(e=None):
+            self.lb.after(0, lambda: (self.lb.selection_clear(0, "end"),
+                                      self.lb.selection_set(self.lb.index("active"))))
+        for k in ("<Up>", "<Down>", "<Prior>", "<Next>", "<Home>", "<End>"):
+            self.lb.bind(k, _sync)
+
         bf = tk.Frame(self); bf.pack(pady=4)
-        tk.Button(bf, text="追加", command=self._add).pack(side="left", padx=4)
-        tk.Button(bf, text="削除", command=self._del).pack(side="left", padx=4)
-        tk.Button(bf, text="閉じる", command=self.destroy).pack(side="left", padx=4)
-        self.bind("<Escape>", lambda _: self.destroy())
+        tk.Button(bf, text="削除",    width=10, command=self._del).pack(side="left", padx=4)
+        tk.Button(bf, text="閉じる",  width=10, command=self.destroy).pack(side="left", padx=4)
+        self.lb.focus_set()
+        if self.lb.size():
+            self.lb.selection_set(0); self.lb.activate(0)
 
     def _reload(self):
-        self.listbox.delete(0, "end")
-        for name, path in self.hotlist.items():
-            self.listbox.insert("end", f"{name}  →  {path}")
-
-    def _go(self, _=None):
-        sel = self.listbox.curselection()
-        if sel:
-            names = list(self.hotlist.keys())
-            path  = self.hotlist[names[sel[0]]]
-            self.callback(path); self.destroy()
-
-    def _add(self):
-        name = simpledialog.askstring("追加", "名前:", parent=self)
-        if not name: return
-        path = simpledialog.askstring("追加", "パス:", parent=self)
-        if path: self.hotlist[name] = path; self._reload()
+        self.lb.delete(0, "end")
+        for name, val in self.hotlist.items():
+            path   = val.get("path", "")   if isinstance(val, dict) else str(val)
+            target = val.get("target", "") if isinstance(val, dict) else ""
+            suffix = f"  [target: {target}]" if target else ""
+            self.lb.insert("end", f"{name}  →  {path}{suffix}")
 
     def _del(self):
-        sel = self.listbox.curselection()
-        if sel:
-            key = list(self.hotlist.keys())[sel[0]]
-            del self.hotlist[key]; self._reload()
+        sel = self.lb.curselection()
+        if not sel: return
+        key = list(self.hotlist.keys())[sel[0]]
+        del self.hotlist[key]; self.on_save(); self._reload()
+        new = min(sel[0], self.lb.size() - 1)
+        if new >= 0: self.lb.selection_set(new); self.lb.activate(new)
 
 # ── メインウィンドウ ─────────────────────────────────
 class App(tk.Tk):
@@ -1856,7 +2012,16 @@ class App(tk.Tk):
             self.ap.refresh()
 
     def cmd_hotlist(self):
-        HotlistDialog(self, self.cfg["hotlist"], self.ap.goto)
+        panel   = self.ap
+        inactive = self.ip
+        def on_goto(path, target=None):
+            panel.goto(path)
+            if target:
+                inactive.goto(target)
+        HotlistMenu(self, self.cfg["hotlist"],
+                    panel.path, inactive.path,
+                    on_goto,
+                    lambda: save_cfg(self.cfg))
         save_cfg(self.cfg)
 
     def cmd_compare_dirs(self):
