@@ -1,10 +1,11 @@
-# Launcher ショートカット作成スクリプト
-# 実行: PowerShell で .\create_shortcut.ps1
+# create_shortcut.ps1
+# Creates a desktop shortcut for original launcher
+# Usage: powershell -ExecutionPolicy Bypass -File .\create_shortcut.ps1
 
 $launcherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pywFile     = Join-Path $launcherDir "start.pyw"
 
-# pythonw.exe のパスを解決 (コンソールなし実行用)
+# Resolve pythonw.exe (runs without a console window)
 $pythonwCmd = Get-Command pythonw.exe -ErrorAction SilentlyContinue
 if ($pythonwCmd) {
     $pythonw = $pythonwCmd.Source
@@ -14,33 +15,31 @@ if ($pythonwCmd) {
 }
 
 if (-not (Test-Path $pythonw)) {
-    Write-Warning "pythonw.exe が見つかりません: $pythonw"
-    Write-Warning "python.exe で代用します (コンソールウィンドウが一瞬出ます)"
+    Write-Warning "pythonw.exe not found at: $pythonw"
+    Write-Warning "Falling back to python.exe (a console window will briefly appear on launch)"
     $pythonw = (Get-Command python.exe).Source
 }
 
-# デスクトップにショートカットを作成
+# Create shortcut on the desktop
 $desktop = [Environment]::GetFolderPath("Desktop")
-$lnkPath = Join-Path $desktop "Launcher.lnk"
+$lnkPath = Join-Path $desktop "original-launcher.lnk"
 
 $ws = New-Object -ComObject WScript.Shell
 $sc = $ws.CreateShortcut($lnkPath)
-$sc.TargetPath      = $pythonw
-$sc.Arguments       = "`"$pywFile`""
+$sc.TargetPath       = $pythonw
+$sc.Arguments        = "`"$pywFile`""
 $sc.WorkingDirectory = $launcherDir
-$sc.Description     = "Launcher - Total Commander互換ファイルマネージャー"
-$sc.IconLocation    = "$pythonw,0"
-$sc.HotKey          = "CTRL+ALT+L"
+$sc.Description      = "original launcher - file manager"
+$sc.IconLocation     = "$pythonw,0"
+$sc.HotKey           = "CTRL+ALT+L"
 $sc.Save()
 
 Write-Host ""
-Write-Host "✓ デスクトップに Launcher.lnk を作成しました" -ForegroundColor Green
-Write-Host "  場所: $lnkPath"
+Write-Host "Shortcut created: $lnkPath" -ForegroundColor Green
 Write-Host ""
-Write-Host "【次の手順】"
-Write-Host "  1. ダブルクリック起動: デスクトップの「Launcher」をダブルクリック"
-Write-Host "  2. タスクバーに追加:   デスクトップの「Launcher」を右クリック"
-Write-Host "                         →「タスクバーにピン留めする」"
-Write-Host "  3. キーボード起動:     デスクトップのショートカットから Ctrl+Alt+L"
-Write-Host "     ※ タスクバーピン留め後は Win+数字キー (Win+1 等) で起動できます"
+Write-Host "Next steps:"
+Write-Host "  1. Double-click 'original-launcher' on the desktop to launch"
+Write-Host "  2. Right-click the shortcut -> Pin to taskbar"
+Write-Host "  3. Keyboard shortcut: Ctrl+Alt+L (works from the desktop shortcut)"
+Write-Host "     After pinning to taskbar, Win+[number] also works"
 Write-Host ""

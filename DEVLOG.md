@@ -1,4 +1,4 @@
-# launcher.py — 開発ログ
+# original launcher — 開発ログ
 
 ## 目的・制約
 
@@ -21,7 +21,7 @@
 - クイック検索 (文字キー入力で前方一致ジャンプ、1.5秒でリセット)
 - F3表示 / F4編集 (設定エディタで変更可能)
 - F5コピー / F6移動 (ダイアログで宛先確認)
-- F7新規ディレクトリ
+- F7新規ディレクトリ (カレントディレクトリに作成)
 - F8削除 → ごみ箱 (Windows: SHFileOperationW)
 - Shift+F4 新規ファイル作成
 - Shift+F5 同ディレクトリにコピー (リネームダイアログ)
@@ -29,7 +29,8 @@
 - Alt+F5 ZIP圧縮 (stdlib の zipfile 使用)
 - Alt+F7 ファイル検索 (名前パターン＋テキスト検索、サブディレクトリ対応)
 - Ctrl+M 一括リネーム (検索置換・正規表現・連番 [N] 対応)
-- Ctrl+D ホットリスト (ブックマーク)
+- Ctrl+D ホットリスト (TC互換ポップアップ、追加・設定・上下並び替え対応)
+- Ctrl+Enter VSCodeで開く (ディレクトリ選択時はvenv選択ダイアログ表示)
 - Shift+F2 ディレクトリ比較
 - Ctrl+B ブランチビュー (サブディレクトリを含む全ファイル一覧)
 - Alt+F10 ディレクトリツリー (遅延ロード)
@@ -47,6 +48,9 @@
 - クイックフィルター (Ctrl+S)
 - cmd.exe / PowerShell を現在ディレクトリで起動
 - ウィンドウサイズ・パス・設定の自動保存
+- アプリアイコン (ロケットアイコン.png)
+- 設定ファイルの保存場所変更 (ポータブルモード)
+- venvベースパス設定 (VSCode起動時に仮想環境を選択・有効化)
 
 ---
 
@@ -135,7 +139,7 @@ self._build_tabbar()
 
 ```python
 self.tree = ttk.Treeview(..., show="tree headings", ...)
-self.tree.column("#0", width=20, stretch=False, minwidth=20)
+self.tree.column("#0", width=32, stretch=False, minwidth=32)
 self.tree.heading("#0", text="")
 ```
 
@@ -167,22 +171,124 @@ self._build_panels()    # expand=True   ← 後
 **修正**:
 
 ```python
-# selectmode を browse に変更
 self.tree = ttk.Treeview(..., selectmode="browse", ...)
 
-# カーソル移動ヘルパー: focus と selection_set を必ず同期させる
 def _set_cursor(self, iid):
     self.tree.focus(iid)
     self.tree.selection_set([iid])
     self.tree.see(iid)
 
-# スタイルマップで selected 状態の色を設定
 s.map(n,
-    background=[("selected", C["cursor_bg"])],   # 濃青 #000080
+    background=[("selected", C["cursor_bg"])],
     foreground=[("selected", C["cursor_fg"])])
 ```
 
-Insert選択行 (`sel` タグ) は濃赤 `#8B0000` にして、カーソル行 (濃青 `#000080`) と区別する。
+---
+
+### 10. アイコン列と名前が重なる
+
+**症状**: `#0` 列の幅が小さく、フォルダアイコンとファイル名が重なって見える  
+**原因**: 初期値20pxではMeiryo UIフォントのアイコンに対して幅不足  
+**修正**: `#0` 列の幅を32pxに変更
+
+```python
+self.tree.column("#0", width=32, stretch=False, minwidth=32)
+```
+
+---
+
+### 11. F7 新規ディレクトリがカレントでなく選択フォルダ内に作られる
+
+**症状**: フォルダにカーソルがある状態でF7を押すと、そのフォルダの中に作成される  
+**原因**: `cmd_mkdir()` がダイアログを開いた後に `self.ap.path` を参照していたが、Enterキーの漏れ (`bind_all("<Return>")`) によりダイアログの確定と同時にカーソル下のフォルダへ遷移し、その後 `goto()` した先に作成されていた  
+**修正1**: `target_dir = panel.path` でパスをダイアログ表示前にスナップショット取得  
+**修正2**: ダイアログの `<Return>` バインドで `"break"` を返しイベント伝播を止める  
+**修正3**: 全 `ba()` 呼び出しに `_guarded` ラッパーを適用し、ダイアログ所有ウィンドウ以外ではキーを無視
+
+---
+
+### 12. コピー/移動後にファイルが開く
+
+**症状**: F5/F6 ダイアログで確定後、コピー先のファイルが開いてしまう  
+**原因**: ダイアログの Enter がリークして `_key_enter()` → `open_file()` が発火  
+**修正**: 11 と同じ `_guarded` ラッパーで対応
+
+---
+
+### 13. 削除・新規作成後にスクロールが先頭に戻る
+
+**症状**: ファイル削除やディレクトリ作成後、パネルの表示が一番上にスクロールされる  
+**原因**: `_populate()` 内で `_set_cursor()` → `see()` が呼ばれ、常にカーソル行が見える位置に移動していた  
+**修正**: リフレッシュ時はスクロール位置を保存・復元し、`see()` を呼ばない
+
+```python
+scroll = self.tree.yview()[0]
+# ... rebuild tree ...
+self.tree.focus(target_iid)
+self.tree.selection_set([target_iid])
+self.tree.yview_moveto(scroll)   # see() は呼ばない
+```
+
+---
+
+### 14. アクティブパネルのヘッダー行まで青くなる
+
+**症状**: アクティブパネル切替時に列ヘッダー (名前/拡張子/サイズ...) まで青背景になる  
+**原因**: `set_active()` が ttk スタイルのヘッダー色を変更していた  
+**修正**: `set_active()` でヘッダー色は変更せず、`selection_set` の管理のみ行う。ヘッダー色は常に固定。
+
+---
+
+### 15. VSCode が見つからないエラー
+
+**症状**: "VSCodeが見つかりません" エラーが出る  
+**原因**: `code` コマンドの実体は `code.cmd` であり、`subprocess.Popen(["code", ...])` では `.cmd` を見つけられない  
+**修正**: `shell=True` を使用する
+
+```python
+subprocess.Popen(cmd, shell=True)
+```
+
+---
+
+### 16. venv 選択ダイアログのキー操作がパネルに漏れる
+
+**症状**: `VenvSelectDialog` 内でカーソルキーを押すとパネルのカーソルが動く  
+**原因**: `bind_all("<Up>/<Down>")` が全ウィジェットに発火する。`_is_input()` は `Entry`/`Text` のみをチェックし `Listbox` は対象外  
+**修正**: 全 `ba()` 呼び出しに `_guarded` ラッパーを適用。ダイアログが開いている間はパネルのキーバインドが無効になる
+
+---
+
+### 17. Listbox の選択状態が青くならない
+
+**症状**: `VenvSelectDialog` の Listbox でフォーカスを失うと選択が消える  
+**原因**: `exportselection=True` (デフォルト) により、他ウィジェットがフォーカスを持つと Listbox の選択がクリアされる  
+**修正**: `exportselection=False` を設定し、`selectbackground`/`selectforeground` を明示指定
+
+---
+
+### 18. Listbox のキー移動で選択ハイライトが追従しない
+
+**症状**: ↑↓キーで移動してもハイライトが追従しない  
+**原因**: Listbox の ↑↓ キーは "active" 位置を動かすが "selection" は動かさない  
+**修正**: `<Up>`/`<Down>` にバインドして `after(0, _sync_sel)` で selection を active に同期
+
+```python
+def _sync_sel():
+    idx = lb.index(tk.ACTIVE)
+    lb.selection_clear(0, tk.END)
+    lb.selection_set(idx)
+lb.bind("<Up>", lambda e: lb.after(0, _sync_sel))
+lb.bind("<Down>", lambda e: lb.after(0, _sync_sel))
+```
+
+---
+
+### 19. create_shortcut.ps1 の文字化けと構文エラー
+
+**症状**: PowerShell で実行すると文字化けするか構文エラーで動かない  
+**原因**: ファイルが UTF-8 (BOMなし) で保存されているが、Windows PowerShell のデフォルトエンコーディングは CP932。日本語文字列と `✓` 記号が誤って解釈された  
+**修正**: ファイル全体を純粋なASCIIで書き直し。日本語コメント・メッセージをすべて英語に置き換え
 
 ---
 

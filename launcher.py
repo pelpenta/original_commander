@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-launcher.py - Total Commander 互換ファイルマネージャー (Python製)
+original launcher - Total Commander 互換ファイルマネージャー (Python製)
 使用方法: python launcher.py [左パネルパス] [右パネルパス]
 依存ライブラリ: 標準ライブラリのみ (tkinter)
 """
