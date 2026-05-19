@@ -1284,12 +1284,20 @@ class HotlistConfigDialog(tk.Toplevel):
         def _sync(e=None):
             self.lb.after(0, lambda: (self.lb.selection_clear(0, "end"),
                                       self.lb.selection_set(self.lb.index("active"))))
-        for k in ("<Up>", "<Down>", "<Prior>", "<Next>", "<Home>", "<End>"):
+        for k in ("<Prior>", "<Next>", "<Home>", "<End>"):
             self.lb.bind(k, _sync)
+        # ↑↓ は移動操作に使うため通常の _sync は付けない
+        self.lb.bind("<Up>",   lambda e: self._move_sel(-1) or "break")
+        self.lb.bind("<Down>", lambda e: self._move_sel(1)  or "break")
+        # Alt+↑↓ で並び替え
+        self.lb.bind("<Alt-Up>",   lambda e: self._move_item(-1) or "break")
+        self.lb.bind("<Alt-Down>", lambda e: self._move_item(1)  or "break")
 
         bf = tk.Frame(self); bf.pack(pady=4)
-        tk.Button(bf, text="削除",    width=10, command=self._del).pack(side="left", padx=4)
-        tk.Button(bf, text="閉じる",  width=10, command=self.destroy).pack(side="left", padx=4)
+        tk.Button(bf, text="↑",      width=4,  command=lambda: self._move_item(-1)).pack(side="left", padx=2)
+        tk.Button(bf, text="↓",      width=4,  command=lambda: self._move_item(1)).pack(side="left", padx=2)
+        tk.Button(bf, text="削除",   width=10, command=self._del).pack(side="left", padx=4)
+        tk.Button(bf, text="閉じる", width=10, command=self.destroy).pack(side="left", padx=4)
         self.lb.focus_set()
         if self.lb.size():
             self.lb.selection_set(0); self.lb.activate(0)
@@ -1309,6 +1317,34 @@ class HotlistConfigDialog(tk.Toplevel):
         del self.hotlist[key]; self.on_save(); self._reload()
         new = min(sel[0], self.lb.size() - 1)
         if new >= 0: self.lb.selection_set(new); self.lb.activate(new)
+
+    def _move_sel(self, d):
+        """↑↓ キーでカーソル移動 (selection を同期)"""
+        sel = self.lb.curselection()
+        cur = sel[0] if sel else self.lb.index("active")
+        new = max(0, min(cur + d, self.lb.size() - 1))
+        self.lb.selection_clear(0, "end")
+        self.lb.selection_set(new)
+        self.lb.activate(new)
+        self.lb.see(new)
+
+    def _move_item(self, d):
+        """↑↓ ボタン / Alt+↑↓ でエントリの順番を入れ替える"""
+        sel = self.lb.curselection()
+        if not sel: return
+        idx = sel[0]
+        items = list(self.hotlist.items())
+        new_idx = idx + d
+        if new_idx < 0 or new_idx >= len(items): return
+        items[idx], items[new_idx] = items[new_idx], items[idx]
+        self.hotlist.clear()
+        for k, v in items:
+            self.hotlist[k] = v
+        self.on_save()
+        self._reload()
+        self.lb.selection_set(new_idx)
+        self.lb.activate(new_idx)
+        self.lb.see(new_idx)
 
 # ── メインウィンドウ ─────────────────────────────────
 class App(tk.Tk):
