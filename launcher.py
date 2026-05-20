@@ -729,7 +729,7 @@ class FilePanel(tk.Frame):
 
     def move_cursor_select(self, direction):
         """Shift+↑↓: 現在行の選択をトグルしてからカーソル移動 (TC互換範囲選択)"""
-        self.toggle_select(self.cursor_iid())
+        self.toggle_select(self.cursor_iid(), advance=False)
         self.move_cursor(direction)
 
     # --- キーリピート (after タイマー制御) ---
@@ -782,7 +782,7 @@ class FilePanel(tk.Frame):
             messagebox.showerror("エラー", f"ZIP展開エラー: {ex}")
 
     # ── 選択操作 ──
-    def toggle_select(self, iid=None):
+    def toggle_select(self, iid=None, advance=True):
         if iid is None: iid = self.cursor_iid()
         if iid == "__up__": return
         try: idx = int(iid)
@@ -791,11 +791,12 @@ class FilePanel(tk.Frame):
         else: self.selected.add(idx)
         self._repaint(iid, idx)
         self._update_status()
-        # 次行へ移動
-        kids = list(self.tree.get_children())
-        pos = kids.index(iid) if iid in kids else 0
-        if pos + 1 < len(kids):
-            self._set_cursor(kids[pos + 1])
+        # Space/Insert 用: 選択後に次行へ進む (Shift+↑↓ からは advance=False で呼ぶ)
+        if advance:
+            kids = list(self.tree.get_children())
+            pos = kids.index(iid) if iid in kids else 0
+            if pos + 1 < len(kids):
+                self._set_cursor(kids[pos + 1])
 
     def _repaint(self, iid, idx):
         e = self.entries[idx]
