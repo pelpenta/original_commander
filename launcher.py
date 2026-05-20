@@ -464,6 +464,13 @@ class FilePanel(tk.Frame):
         self.refresh()
 
     def go_parent(self):
+        zip_tmp = getattr(self, "_zip_tmp", None)
+        if zip_tmp and str(self.path) == zip_tmp:
+            origin = getattr(self, "_zip_origin", None)
+            self._zip_tmp = None
+            self._zip_origin = None
+            self.goto(origin or str(self.path.parent))
+            return
         p = self.path.parent
         if p != self.path: self.goto(p)
 
@@ -668,6 +675,8 @@ class FilePanel(tk.Frame):
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
+            self._zip_tmp    = tmp
+            self._zip_origin = str(Path(zip_path).parent)
             self.goto(tmp)
         except Exception as ex:
             messagebox.showerror("エラー", f"ZIP展開エラー: {ex}")
