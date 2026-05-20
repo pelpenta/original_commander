@@ -362,6 +362,8 @@ class FilePanel(tk.Frame):
         self.tree.bind("<Control-Shift-Tab>", lambda e: (self.app._prev_tab(), "break")[1])
         self.tree.bind("<Alt-Down>",          lambda e: (self.app.cmd_history_popup(), "break")[1])
         self.tree.bind("<Control-Prior>",     lambda e: (self.app.ap.go_parent(), "break")[1])
+        self.tree.bind("<Shift-Up>",          lambda e: (self.move_cursor_select("up"),   "break")[1])
+        self.tree.bind("<Shift-Down>",        lambda e: (self.move_cursor_select("down"), "break")[1])
 
     def _setup_style(self):
         s = ttk.Style()
@@ -695,6 +697,11 @@ class FilePanel(tk.Frame):
              "pgup": max(0, idx-15), "pgdn": min(len(kids)-1, idx+15),
              "home": 0, "end": len(kids)-1}.get(direction, idx)
         self._set_cursor(kids[n])
+
+    def move_cursor_select(self, direction):
+        """Shift+↑↓: 現在行の選択をトグルしてからカーソル移動 (TC互換範囲選択)"""
+        self.toggle_select(self.cursor_iid())
+        self.move_cursor(direction)
 
     def enter_cursor(self):
         iid = self.cursor_iid()
@@ -2429,6 +2436,7 @@ Launcher - Python Total Commander互換ファイルマネージャー
 
 【選択】
   Insert / Space   カーソル行の選択トグル
+  Shift+↑/↓       範囲選択 (現在行をトグルしながら移動)
   Ctrl+A           全選択
   Num + (テンキー) パターンで選択
   Num - (テンキー) パターンで選択解除
