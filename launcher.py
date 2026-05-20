@@ -344,6 +344,9 @@ class FilePanel(tk.Frame):
             self.tree.bind(_key, lambda e, d=_dir: (self.move_cursor(d), "break")[1])
         # Tab: クラスバインディング(デフォルト遷移)を抑止して確実にパネル切替
         self.tree.bind("<Tab>", lambda e: (self.app._switch_panel_from(self), "break")[1])
+        # Ctrl+↓/↑: Treeview クラスバインディングが bind_all より先に break するため直接登録
+        self.tree.bind("<Control-Down>", lambda e: (self.app._focus_cmdline(), "break")[1])
+        self.tree.bind("<Control-Up>",   lambda e: (self.app._copy_name_to_cmdline(), "break")[1])
 
     def _setup_style(self):
         s = ttk.Style()
