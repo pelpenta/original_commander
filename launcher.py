@@ -34,6 +34,8 @@ DEFAULT_CFG = {
     "right_history": [],
     "saved_selection": [],
     "venv_bases": [],
+    "key_repeat_delay":    150,   # ms: 長押し認識までの遅延
+    "key_repeat_interval":  30,   # ms: リピート間隔 (小さいほど速い)
 }
 
 def load_cfg():
@@ -350,19 +352,30 @@ class FilePanel(tk.Frame):
         self.tree.bind("<Button-3>",        self._right_click)
         self.tree.bind("<FocusIn>",         self._on_focus)
         # 矢印キー: Treeview のデフォルト処理(1行動く)と bind_all(もう1行動く)の
-        # 二重発火を防ぐため、ウィジェット自身でバインドして "break" で止める
-        # <Down>/<Up> は修飾キーなしでも Shift+Down/Up にマッチするため、
-        # Shift の判定をハンドラ内で行い Shift-Up/Down の個別バインドは設けない
+        # 二重発火を防ぐため、ウィジェット自身でバインドして "break" で止める。
+        # <Down>/<Up> は Shift+Down/Up にもマッチするため Shift 判定をハンドラ内で行う。
+        # OS リピートを無視し after() タイマーで速度を制御する。
         for _key, _dir in [("<Up>","up"),("<Down>","down"),
                            ("<Prior>","pgup"),("<Next>","pgdn"),
                            ("<Home>","home"),("<End>","end")]:
             def _nav(e, d=_dir):
-                if (e.state & 0x1) and d in ("up", "down"):
-                    self.move_cursor_select(d)
-                else:
-                    self.move_cursor(d)
+                is_sel = bool(e.state & 0x1) and d in ("up", "down")
+                if getattr(self, "_key_repeat_dir", None) != d:
+                    # 初回押下: 即時移動してタイマー開始
+                    self._stop_key_repeat()
+                    self._key_repeat_dir = d
+                    self._key_repeat_sel = is_sel
+                    self._do_nav(d, is_sel)
+                    delay = self.app.cfg.get("key_repeat_delay", 150)
+                    self._key_repeat_job = self.tree.after(delay, self._tick_key_repeat)
+                # else: OS リピートイベントは無視 (タイマーが処理中)
                 return "break"
             self.tree.bind(_key, _nav)
+        for _key in ("<KeyRelease-Up>", "<KeyRelease-Down>",
+                     "<KeyRelease-Prior>", "<KeyRelease-Next>",
+                     "<KeyRelease-Home>", "<KeyRelease-End>"):
+            self.tree.bind(_key, lambda e: self._stop_key_repeat())
+        self.tree.bind("<FocusOut>", lambda e: self._stop_key_repeat())
         # Tab: クラスバインディング(デフォルト遷移)を抑止して確実にパネル切替
         self.tree.bind("<Tab>", lambda e: (self.app._switch_panel_from(self), "break")[1])
         # 以下は Treeview クラスバインディングが bind_all より先に break するため直接登録
@@ -718,6 +731,28 @@ class FilePanel(tk.Frame):
         """Shift+↑↓: 現在行の選択をトグルしてからカーソル移動 (TC互換範囲選択)"""
         self.toggle_select(self.cursor_iid())
         self.move_cursor(direction)
+
+    # --- キーリピート (after タイマー制御) ---
+    def _do_nav(self, d, is_sel):
+        if is_sel:
+            self.move_cursor_select(d)
+        else:
+            self.move_cursor(d)
+
+    def _tick_key_repeat(self):
+        d = getattr(self, "_key_repeat_dir", None)
+        if not d:
+            return
+        self._do_nav(d, getattr(self, "_key_repeat_sel", False))
+        interval = self.app.cfg.get("key_repeat_interval", 30)
+        self._key_repeat_job = self.tree.after(interval, self._tick_key_repeat)
+
+    def _stop_key_repeat(self):
+        job = getattr(self, "_key_repeat_job", None)
+        if job:
+            self.tree.after_cancel(job)
+            self._key_repeat_job = None
+        self._key_repeat_dir = None
 
     def enter_cursor(self):
         iid = self.cursor_iid()
@@ -1520,6 +1555,7 @@ class App(tk.Tk):
         cfg.add_separator()
         cfg.add_command(label="エディタ設定",             command=self.cmd_cfg_editor)
         cfg.add_command(label="venvベースパス設定",        command=self.cmd_cfg_venv)
+        cfg.add_command(label="キーリピート速度",          command=self.cmd_cfg_key_repeat)
         cfg.add_command(label="コマンドラインの表示切替", command=self.cmd_toggle_cmdline)
         cfg.add_command(label="ファンクションキーバーの表示切替", command=self.cmd_toggle_fnbar)
         cfg.add_separator()
@@ -2378,6 +2414,21 @@ class App(tk.Tk):
         e = simpledialog.askstring("エディタ設定",
             "エディタの実行ファイル名:", initialvalue=self.cfg.get("editor","notepad"), parent=self)
         if e: self.cfg["editor"] = e; save_cfg(self.cfg)
+
+    def cmd_cfg_key_repeat(self):
+        delay = simpledialog.askinteger("キーリピート速度",
+            "長押し認識までの遅延 (ms)  ※デフォルト: 150",
+            initialvalue=self.cfg.get("key_repeat_delay", 150),
+            minvalue=50, maxvalue=1000, parent=self)
+        if delay is None: return
+        interval = simpledialog.askinteger("キーリピート速度",
+            "リピート間隔 (ms)  ※デフォルト: 30\n小さいほど速い",
+            initialvalue=self.cfg.get("key_repeat_interval", 30),
+            minvalue=10, maxvalue=500, parent=self)
+        if interval is None: return
+        self.cfg["key_repeat_delay"] = delay
+        self.cfg["key_repeat_interval"] = interval
+        save_cfg(self.cfg)
 
     def cmd_cfg_venv(self):
         dlg = VenvBasesDialog(self, self.cfg.get("venv_bases", []))
