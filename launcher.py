@@ -52,6 +52,17 @@ def save_cfg(cfg):
     except Exception:
         pass
 
+# ── パスユーティリティ ───────────────────────────────
+def _safe_resolve(p: Path) -> Path:
+    """Path.resolve() のネットワークドライブ安全版。
+    resolve() はシンボリックリンク解決のためにFSにアクセスするため
+    ネットワークドライブで OSError (WinError 59 等) が出ることがある。
+    失敗時は os.path.abspath() にフォールバック (FSアクセスなし)。"""
+    try:
+        return p.resolve()
+    except OSError:
+        return Path(os.path.abspath(p))
+
 # ── ファイル情報ユーティリティ ────────────────────────
 def fmt_size(n):
     if n < 0: return "<DIR>"
@@ -252,7 +263,7 @@ class FilePanel(tk.Frame):
         super().__init__(master, bg=C["panel_bg"])
         self.app  = app
         self.side = side          # "left" / "right"
-        self.path = Path(init_path).resolve()
+        self.path = _safe_resolve(Path(init_path))
         self.entries   = []       # 現在表示中のエントリ
         self.selected  = set()    # 選択済みindex
         self.saved_sel = []       # Num/ で保存した選択
@@ -451,7 +462,7 @@ class FilePanel(tk.Frame):
             self.history = self.history[:self.hist_pos + 1]
             self.history.append(str(self.path))
             self.hist_pos = len(self.history) - 1
-        self.path = p.resolve()
+        self.path = _safe_resolve(p)
         self.selected.clear()
         self.q_str = ""
         # ドライブコンボ更新
@@ -688,7 +699,7 @@ class FilePanel(tk.Frame):
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
-            self._zip_tmp    = str(Path(tmp).resolve())
+            self._zip_tmp    = str(_safe_resolve(Path(tmp)))
             self._zip_origin = str(Path(zip_path).parent)
             self.goto(tmp)
         except Exception as ex:
