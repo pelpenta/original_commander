@@ -359,9 +359,14 @@ class FilePanel(tk.Frame):
                            ("<Prior>","pgup"),("<Next>","pgdn"),
                            ("<Home>","home"),("<End>","end")]:
             def _nav(e, d=_dir):
+                # OS auto-repeat による deferred stop をキャンセル
+                j = getattr(self, "_key_repeat_stop_job", None)
+                if j:
+                    self.tree.after_cancel(j)
+                    self._key_repeat_stop_job = None
                 is_sel = bool(e.state & 0x1) and d in ("up", "down")
                 if getattr(self, "_key_repeat_dir", None) != d:
-                    # 初回押下: 即時移動してタイマー開始
+                    # 初回押下 (または方向転換): 即時移動してタイマー開始
                     self._stop_key_repeat()
                     self._key_repeat_dir = d
                     self._key_repeat_sel = is_sel
@@ -374,7 +379,9 @@ class FilePanel(tk.Frame):
         for _key in ("<KeyRelease-Up>", "<KeyRelease-Down>",
                      "<KeyRelease-Prior>", "<KeyRelease-Next>",
                      "<KeyRelease-Home>", "<KeyRelease-End>"):
-            self.tree.bind(_key, lambda e: self._stop_key_repeat())
+            # Windows は OS auto-repeat 中も KeyRelease を送るため即時停止しない。
+            # 60ms 以内に次の KeyPress が来なければ本当のリリースと判断する。
+            self.tree.bind(_key, lambda e: self._debounce_stop_key_repeat())
         self.tree.bind("<FocusOut>", lambda e: self._stop_key_repeat())
         # Tab: クラスバインディング(デフォルト遷移)を抑止して確実にパネル切替
         self.tree.bind("<Tab>", lambda e: (self.app._switch_panel_from(self), "break")[1])
@@ -741,11 +748,27 @@ class FilePanel(tk.Frame):
 
     def _tick_key_repeat(self):
         d = getattr(self, "_key_repeat_dir", None)
-        if not d:
-            return
+        if not d: return
+        before = self.cursor_iid()
         self._do_nav(d, getattr(self, "_key_repeat_sel", False))
+        # カーソルが動かなかった = 境界到達 → タイマー停止
+        if before == self.cursor_iid():
+            self._stop_key_repeat()
+            return
         interval = self.app.cfg.get("key_repeat_interval", 30)
         self._key_repeat_job = self.tree.after(interval, self._tick_key_repeat)
+
+    def _debounce_stop_key_repeat(self):
+        """KeyRelease 受信後、60ms 以内に新しい KeyPress が来なければ停止する。
+        Windows OS auto-repeat は KeyRelease/KeyPress を短間隔で交互に送るため
+        即時停止するとタイマーが毎回キャンセルされて「ため」が消える。"""
+        j = getattr(self, "_key_repeat_stop_job", None)
+        if j: self.tree.after_cancel(j)
+        self._key_repeat_stop_job = self.tree.after(60, self._confirmed_stop_key_repeat)
+
+    def _confirmed_stop_key_repeat(self):
+        self._key_repeat_stop_job = None
+        self._stop_key_repeat()
 
     def _stop_key_repeat(self):
         job = getattr(self, "_key_repeat_job", None)
