@@ -392,13 +392,16 @@ class FilePanel(tk.Frame):
         tk.Label(self.drive_frame, textvariable=self.space_var,
             bg=C["bar_bg"], fg=C["bar_fg"], font=("Meiryo UI", 8)
         ).pack(side="left", padx=4)
-        # \ .. ボタン
-        tk.Button(self.drive_frame, text="\\", width=2,
-            bg=C["bar_bg"], font=("Meiryo UI", 8), relief="flat",
-            command=self.go_root).pack(side="left")
-        tk.Button(self.drive_frame, text="..", width=2,
-            bg=C["bar_bg"], font=("Meiryo UI", 8), relief="flat",
-            command=self.go_parent).pack(side="left")
+        def _drvbtn(text, cmd):
+            b = tk.Button(self.drive_frame, text=text, width=2,
+                bg=C["bar_bg"], fg="#111111",
+                font=("Meiryo UI", 9), relief="flat", bd=1,
+                activebackground="#C8C4B8", cursor="hand2", command=cmd)
+            b.bind("<Enter>", lambda e, w=b: w.config(relief="groove"))
+            b.bind("<Leave>", lambda e, w=b: w.config(relief="flat"))
+            b.pack(side="left", padx=1, pady=1)
+        _drvbtn("\\", self.go_root)
+        _drvbtn("..", self.go_parent)
 
     def _build_tabbar(self):
         for w in self.tab_frame.winfo_children(): w.destroy()
@@ -406,14 +409,17 @@ class FilePanel(tk.Frame):
             name = Path(t).name or t
             active = (i == self.cur_tab)
             btn = tk.Button(self.tab_frame, text=name, takefocus=False,
-                bg=C["active_hdr"] if active else C["bar_bg"],
-                fg=C["active_hdr_fg"] if active else C["bar_fg"],
-                font=("Meiryo UI", 8), relief="flat", padx=5, pady=0,
+                bg="#FFFFFF"   if active else "#C0BCB2",
+                fg="#000000"   if active else "#333333",
+                font=("Meiryo UI", 9, "bold") if active else ("Meiryo UI", 9),
+                relief="raised" if active else "groove",
+                bd=1, padx=8, pady=2, cursor="hand2",
                 command=lambda idx=i: self._switch_tab(idx))
-            btn.pack(side="left")
-        tk.Button(self.tab_frame, text="+", bg=C["bar_bg"], fg="#008000",
-            font=("Meiryo UI", 8), relief="flat", padx=3, takefocus=False,
-            command=self.new_tab).pack(side="left")
+            btn.pack(side="left", padx=(0, 1), pady=(2, 0))
+        tk.Button(self.tab_frame, text="+", bg=C["bar_bg"], fg="#006600",
+            font=("Meiryo UI", 9, "bold"), relief="flat", padx=4,
+            pady=2, takefocus=False, cursor="hand2",
+            command=self.new_tab).pack(side="left", pady=(2, 0))
 
     def _switch_tab(self, idx):
         self.tabs[self.cur_tab] = str(self.path)
@@ -1503,26 +1509,33 @@ class App(tk.Tk):
     def _build_toolbar(self):
         self.toolbar = tk.Frame(self, bg=C["bar_bg"], relief="raised", bd=1)
         self.toolbar.pack(fill="x")
-        def tb(text, cmd, tip=""):
+        def tb(text, cmd):
             b = tk.Button(self.toolbar, text=text, command=cmd,
-                bg=C["bar_bg"], font=("Meiryo UI", 7),
-                relief="flat", padx=4, pady=1)
-            b.pack(side="left", padx=1)
+                bg=C["bar_bg"], fg="#111111",
+                font=("Meiryo UI", 9),
+                relief="flat", bd=1, padx=6, pady=2,
+                activebackground="#C8C4B8", cursor="hand2")
+            b.bind("<Enter>", lambda e, w=b: w.config(relief="groove"))
+            b.bind("<Leave>", lambda e, w=b: w.config(relief="flat"))
+            b.pack(side="left", padx=1, pady=1)
             return b
+        def sep():
+            tk.Frame(self.toolbar, width=1, bg="#999999").pack(
+                side="left", fill="y", padx=3, pady=3)
         tb("↺ 更新", lambda: self.ap.refresh())
-        tk.Frame(self.toolbar, width=2, bg="#808080").pack(side="left", fill="y", padx=2)
-        tb("← 戻る",   self.cmd_back)
-        tb("→ 進む",   self.cmd_forward)
-        tk.Frame(self.toolbar, width=2, bg="#808080").pack(side="left", fill="y", padx=2)
-        tb("F3 表示",  self.cmd_view)
-        tb("F4 編集",  self.cmd_edit)
+        sep()
+        tb("← 戻る",    self.cmd_back)
+        tb("→ 進む",    self.cmd_forward)
+        sep()
+        tb("F3 表示",   self.cmd_view)
+        tb("F4 編集",   self.cmd_edit)
         tb("F5 コピー", self.cmd_copy)
-        tb("F6 移動",  self.cmd_move)
-        tb("F7 新規Dir", self.cmd_mkdir)
-        tb("F8 削除",  self.cmd_delete)
-        tk.Frame(self.toolbar, width=2, bg="#808080").pack(side="left", fill="y", padx=2)
-        tb("検索", self.cmd_find)
-        tb("リネーム", self.cmd_multi_rename)
+        tb("F6 移動",   self.cmd_move)
+        tb("F7 新規Dir",self.cmd_mkdir)
+        tb("F8 削除",   self.cmd_delete)
+        sep()
+        tb("検索",      self.cmd_find)
+        tb("リネーム",  self.cmd_multi_rename)
         tb("Ctrl+U 交換", self.cmd_exchange)
 
     def _build_panels(self, left_path, right_path):
@@ -1595,10 +1608,11 @@ class App(tk.Tk):
             f = tk.Frame(self.fnbar_frame, bg=C["fnbar_bg"])
             f.pack(side="left", expand=True, fill="x")
             tk.Label(f, text=fk, bg=C["fnbar_bg"], fg=C["fnbar_num"],
-                font=("Meiryo UI", 8, "bold")).pack(side="left")
+                font=("Meiryo UI", 9, "bold")).pack(side="left")
             tk.Button(f, text=lbl, command=cmd, bg=C["fnbar_bg"],
                 fg=C["fnbar_lbl"], relief="flat",
-                font=("Meiryo UI", 8), bd=0).pack(side="left", fill="x", expand=True)
+                font=("Meiryo UI", 9), bd=0,
+                activebackground="#1a1a8a").pack(side="left", fill="x", expand=True)
 
     def _build_statusbar(self):
         self.status_frame = tk.Frame(self, bg=C["bar_bg"], relief="sunken", bd=1)
