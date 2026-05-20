@@ -658,7 +658,7 @@ class FilePanel(tk.Frame):
         if idx >= len(self.entries): return
         e = self.entries[idx]
         if e["is_dir"]: self.goto(e["path"])
-        elif zipfile.is_zipfile(e["path"]): self._browse_zip(e["path"])
+        elif Path(e["path"]).suffix.lower() == ".zip" and zipfile.is_zipfile(e["path"]): self._browse_zip(e["path"])
         else: open_file(Path(e["path"]))
 
     def _browse_zip(self, zip_path):
