@@ -304,6 +304,8 @@ class FilePanel(tk.Frame):
             insertbackground=C["path_fg"])
         self.path_entry.pack(side="left", fill="x", expand=True, padx=2, pady=1)
         self.path_entry.bind("<Return>", self._path_enter)
+        self.path_entry.bind("<Tab>",    lambda e: (self.tree.focus_set(), "break")[1])
+        self.path_entry.bind("<Escape>", lambda e: (self.tree.focus_set(), "break")[1])
         self.filter_btn = tk.Button(path_row, text="*", width=2,
             bg=C["bar_bg"], font=("Meiryo UI", 8),
             command=self._change_filter, relief="flat")
@@ -349,10 +351,18 @@ class FilePanel(tk.Frame):
         self.tree.bind("<FocusIn>",         self._on_focus)
         # 矢印キー: Treeview のデフォルト処理(1行動く)と bind_all(もう1行動く)の
         # 二重発火を防ぐため、ウィジェット自身でバインドして "break" で止める
+        # <Down>/<Up> は修飾キーなしでも Shift+Down/Up にマッチするため、
+        # Shift の判定をハンドラ内で行い Shift-Up/Down の個別バインドは設けない
         for _key, _dir in [("<Up>","up"),("<Down>","down"),
                            ("<Prior>","pgup"),("<Next>","pgdn"),
                            ("<Home>","home"),("<End>","end")]:
-            self.tree.bind(_key, lambda e, d=_dir: (self.move_cursor(d), "break")[1])
+            def _nav(e, d=_dir):
+                if (e.state & 0x1) and d in ("up", "down"):
+                    self.move_cursor_select(d)
+                else:
+                    self.move_cursor(d)
+                return "break"
+            self.tree.bind(_key, _nav)
         # Tab: クラスバインディング(デフォルト遷移)を抑止して確実にパネル切替
         self.tree.bind("<Tab>", lambda e: (self.app._switch_panel_from(self), "break")[1])
         # 以下は Treeview クラスバインディングが bind_all より先に break するため直接登録
@@ -362,8 +372,6 @@ class FilePanel(tk.Frame):
         self.tree.bind("<Control-Shift-Tab>", lambda e: (self.app._prev_tab(), "break")[1])
         self.tree.bind("<Alt-Down>",          lambda e: (self.app.cmd_history_popup(), "break")[1])
         self.tree.bind("<Control-Prior>",     lambda e: (self.app.ap.go_parent(), "break")[1])
-        self.tree.bind("<Shift-Up>",          lambda e: (self.move_cursor_select("up"),   "break")[1])
-        self.tree.bind("<Shift-Down>",        lambda e: (self.move_cursor_select("down"), "break")[1])
 
     def _setup_style(self):
         s = ttk.Style()
@@ -1744,6 +1752,8 @@ class App(tk.Tk):
         # Ctrl+↓/↑ : コマンドライン操作
         ba("<Control-Down>", lambda e: self._focus_cmdline())
         ba("<Control-Up>",   lambda e: self._copy_name_to_cmdline())
+        ba("<Control-l>",    lambda e: self._focus_pathbar())
+        ba("<Control-L>",    lambda e: self._focus_pathbar())
         # Alt+方向キー
         ba("<Alt-Left>",   lambda e: self.cmd_back())
         ba("<Alt-Right>",  lambda e: self.cmd_forward())
@@ -1788,6 +1798,14 @@ class App(tk.Tk):
         # Treeview以外 (ツールバーボタン等) からTabが来た場合はアクティブパネルに移動
         if event.widget not in (self.left.tree, self.right.tree):
             self.ap.tree.focus_set()
+        return "break"
+
+    def _focus_pathbar(self):
+        """Ctrl+L: アクティブパネルのアドレスバーへフォーカスを移す"""
+        entry = self.ap.path_entry
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
+        entry.icursor(tk.END)
         return "break"
 
     def _focus_cmdline(self):
