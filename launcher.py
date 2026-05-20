@@ -355,9 +355,13 @@ class FilePanel(tk.Frame):
             self.tree.bind(_key, lambda e, d=_dir: (self.move_cursor(d), "break")[1])
         # Tab: クラスバインディング(デフォルト遷移)を抑止して確実にパネル切替
         self.tree.bind("<Tab>", lambda e: (self.app._switch_panel_from(self), "break")[1])
-        # Ctrl+↓/↑: Treeview クラスバインディングが bind_all より先に break するため直接登録
-        self.tree.bind("<Control-Down>", lambda e: (self.app._focus_cmdline(), "break")[1])
-        self.tree.bind("<Control-Up>",   lambda e: (self.app._copy_name_to_cmdline(), "break")[1])
+        # 以下は Treeview クラスバインディングが bind_all より先に break するため直接登録
+        self.tree.bind("<Control-Down>",      lambda e: (self.app._focus_cmdline(), "break")[1])
+        self.tree.bind("<Control-Up>",        lambda e: (self.app._copy_name_to_cmdline(), "break")[1])
+        self.tree.bind("<Control-Tab>",       lambda e: (self.app._next_tab(), "break")[1])
+        self.tree.bind("<Control-Shift-Tab>", lambda e: (self.app._prev_tab(), "break")[1])
+        self.tree.bind("<Alt-Down>",          lambda e: (self.app.cmd_history_popup(), "break")[1])
+        self.tree.bind("<Control-Prior>",     lambda e: (self.app.ap.go_parent(), "break")[1])
 
     def _setup_style(self):
         s = ttk.Style()
@@ -1714,6 +1718,7 @@ class App(tk.Tk):
         # Alt+方向キー
         ba("<Alt-Left>",   lambda e: self.cmd_back())
         ba("<Alt-Right>",  lambda e: self.cmd_forward())
+        ba("<Alt-Down>",   lambda e: self.cmd_history_popup())
         ba("<Alt-Return>", lambda e: self.cmd_properties())
         # Tab / 方向キー
         ba("<Tab>",        lambda e: self._key_tab(e))
@@ -2033,6 +2038,62 @@ class App(tk.Tk):
     # ── ナビゲーションコマンド ──
     def cmd_back(self):    self.ap.go_back()
     def cmd_forward(self): self.ap.go_forward()
+
+    def cmd_history_popup(self):
+        """Alt+Down: アクティブパネルの履歴リストをポップアップ表示"""
+        panel = self.ap
+        hist = panel.history
+        if not hist: return
+
+        top = tk.Toplevel(self)
+        top.overrideredirect(True)
+        top.transient(self)
+
+        # パスバー直下に表示
+        try:
+            x = panel.path_entry.winfo_rootx()
+            y = panel.path_entry.winfo_rooty() + panel.path_entry.winfo_height()
+            w = panel.path_entry.winfo_width()
+        except Exception:
+            x, y, w = self.winfo_rootx(), self.winfo_rooty() + 60, 400
+
+        lb = tk.Listbox(top, font=("Meiryo UI", 9),
+                        exportselection=False,
+                        selectbackground=C["cursor_bg"],
+                        selectforeground=C["cursor_fg"],
+                        activestyle="none",
+                        width=max(40, w // 8),
+                        height=min(len(hist), 15))
+        for p in reversed(hist):
+            lb.insert(tk.END, p)
+        lb.selection_set(0)
+        lb.activate(0)
+        lb.pack()
+
+        def go(_=None):
+            sel = lb.curselection()
+            idx = sel[0] if sel else lb.index(tk.ACTIVE)
+            path = list(reversed(hist))[idx]
+            top.destroy()
+            panel.goto(path)
+            panel.tree.focus_set()
+
+        def sync_sel(e=None):
+            lb.after(0, lambda: (
+                lb.selection_clear(0, tk.END),
+                lb.selection_set(lb.index(tk.ACTIVE))
+            ))
+
+        lb.bind("<Up>",              sync_sel)
+        lb.bind("<Down>",            sync_sel)
+        lb.bind("<Return>",          go)
+        lb.bind("<Double-Button-1>", go)
+        lb.bind("<Escape>",          lambda _: top.destroy())
+        lb.bind("<FocusOut>",        lambda _: top.destroy())
+
+        top.geometry(f"+{x}+{y}")
+        top.grab_set()
+        lb.focus_set()
 
     def cmd_exchange(self):
         lp, rp = str(self.left.path), str(self.right.path)
