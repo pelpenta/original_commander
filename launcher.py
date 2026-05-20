@@ -452,6 +452,14 @@ class FilePanel(tk.Frame):
 
     # ── ナビゲーション ──
     def goto(self, path, push_history=True):
+        s = str(path).strip()
+        if s.lower().startswith(("http://", "https://", "ftp://")):
+            try:
+                import webbrowser
+                webbrowser.open(s)
+            except Exception as ex:
+                messagebox.showerror("エラー", str(ex))
+            return
         p = Path(path)
         if not p.exists():
             messagebox.showerror("エラー", f"パスが存在しません:\n{path}")
