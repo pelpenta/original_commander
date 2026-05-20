@@ -725,14 +725,19 @@ class FilePanel(tk.Frame):
         return [Path(e["path"])] if e else []
 
     def move_cursor(self, direction):
-        kids = list(self.tree.get_children())
-        if not kids: return
+        # IID は "__up__"(pos=0) と str(i)(pos=i+1) の決定論的な値なので
+        # get_children()/index() を使わず O(1) で計算する
+        total = len(self.entries) + 1  # +1 for __up__
+        if total <= 1: return
         cur = self.cursor_iid()
-        idx = kids.index(cur) if cur in kids else 0
-        n = {"up": max(0, idx-1), "down": min(len(kids)-1, idx+1),
-             "pgup": max(0, idx-15), "pgdn": min(len(kids)-1, idx+15),
-             "home": 0, "end": len(kids)-1}.get(direction, idx)
-        self._set_cursor(kids[n])
+        pos = 0 if cur == "__up__" else (int(cur) + 1 if cur else 0)
+        new_pos = {"up":   max(0, pos - 1),
+                   "down": min(total - 1, pos + 1),
+                   "pgup": max(0, pos - 15),
+                   "pgdn": min(total - 1, pos + 15),
+                   "home": 0,
+                   "end":  total - 1}.get(direction, pos)
+        self._set_cursor("__up__" if new_pos == 0 else str(new_pos - 1))
 
     def move_cursor_select(self, direction):
         """Shift+↑↓: 現在行の選択をトグルしてからカーソル移動 (TC互換範囲選択)"""
@@ -816,10 +821,13 @@ class FilePanel(tk.Frame):
         self._update_status()
         # Space/Insert 用: 選択後に次行へ進む (Shift+↑↓ からは advance=False で呼ぶ)
         if advance:
-            kids = list(self.tree.get_children())
-            pos = kids.index(iid) if iid in kids else 0
-            if pos + 1 < len(kids):
-                self._set_cursor(kids[pos + 1])
+            if iid == "__up__":
+                next_iid = "0" if self.entries else None
+            else:
+                next_idx = int(iid) + 1
+                next_iid = str(next_idx) if next_idx < len(self.entries) else None
+            if next_iid is not None:
+                self._set_cursor(next_iid)
 
     def _repaint(self, iid, idx):
         e = self.entries[idx]
