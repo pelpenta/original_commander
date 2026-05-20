@@ -513,7 +513,9 @@ class FilePanel(tk.Frame):
                 self.goto(origin or str(self.path.parent))
                 return
         p = self.path.parent
-        if p != self.path: self.goto(p)
+        if p != self.path:
+            self._pending_cursor = self.path.name  # 上移動後、元いたフォルダにフォーカス
+            self.goto(p)
 
     def go_root(self):
         self.goto(self.path.anchor)
@@ -557,18 +559,24 @@ class FilePanel(tk.Frame):
 
     # ── 表示更新 ──
     def refresh(self):
-        # entries 更新前にカーソル位置を保存
-        cur_iid = self.cursor_iid()
-        cur_name = None
-        cur_idx = 0
-        if cur_iid == "__up__":
-            cur_name = "__up__"
-        elif cur_iid:
-            try:
-                cur_idx = int(cur_iid)
-                cur_name = self.entries[cur_idx]["name"]
-            except Exception:
-                pass
+        # go_parent() が設定した優先カーソル名があればそちらを使う
+        pending = getattr(self, "_pending_cursor", None)
+        if pending is not None:
+            cur_name, cur_idx = pending, 0
+            self._pending_cursor = None
+        else:
+            # entries 更新前にカーソル位置を保存
+            cur_iid = self.cursor_iid()
+            cur_name = None
+            cur_idx = 0
+            if cur_iid == "__up__":
+                cur_name = "__up__"
+            elif cur_iid:
+                try:
+                    cur_idx = int(cur_iid)
+                    cur_name = self.entries[cur_idx]["name"]
+                except Exception:
+                    pass
         raw = list_dir(str(self.path), self.app.cfg.get("show_hidden", True))
         # フィルター適用
         if self.filter not in ("*.*", "*"):
