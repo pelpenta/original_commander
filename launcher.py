@@ -1536,6 +1536,7 @@ class App(tk.Tk):
         self.cmdline.pack(fill="x", expand=True, padx=2, pady=1)
         self.cmdline.bind("<Return>",  self._exec_cmd)
         self.cmdline.bind("<Escape>",  self._esc_cmd)
+        self.cmdline.bind("<Tab>",     lambda e: (self.ap.tree.focus_set(), "break")[1])
         self.cmdline.bind("<FocusIn>", lambda _: None)
 
     def _build_fnbar(self):
@@ -1675,6 +1676,9 @@ class App(tk.Tk):
         ba("<Control-BackSpace>",   lambda e: self._key_go_parent(e))
         ba("<Control-Prior>",       lambda e: self._key_go_parent(e))
         ba("<Control-backslash>",   lambda e: self.ap.go_root())
+        # Ctrl+↓/↑ : コマンドライン操作
+        ba("<Control-Down>", lambda e: self._focus_cmdline())
+        ba("<Control-Up>",   lambda e: self._copy_name_to_cmdline())
         # Alt+方向キー
         ba("<Alt-Left>",   lambda e: self.cmd_back())
         ba("<Alt-Right>",  lambda e: self.cmd_forward())
@@ -1718,6 +1722,27 @@ class App(tk.Tk):
         # Treeview以外 (ツールバーボタン等) からTabが来た場合はアクティブパネルに移動
         if event.widget not in (self.left.tree, self.right.tree):
             self.ap.tree.focus_set()
+        return "break"
+
+    def _focus_cmdline(self):
+        """Ctrl+↓: コマンドラインへフォーカスを移す"""
+        if not self.cfg.get("show_cmdline", True):
+            return "break"
+        self.cmdline.focus_set()
+        self.cmdline.icursor(tk.END)
+        return "break"
+
+    def _copy_name_to_cmdline(self):
+        """Ctrl+↑: カーソル下のファイル/ディレクトリ名をコマンドラインに挿入"""
+        e = self.ap.cursor_entry()
+        if not e: return "break"
+        if not self.cfg.get("show_cmdline", True): return "break"
+        name = e["name"]
+        text = f'"{name}"' if " " in name else name
+        self.cmdline.focus_set()
+        pos = self.cmdline.index(tk.INSERT)
+        self.cmdline.insert(pos, text)
+        self.cmdline.icursor(tk.END)
         return "break"
 
     def _key_enter(self, event):
@@ -1987,17 +2012,59 @@ class App(tk.Tk):
     def cmd_change_drive(self, side):
         panel = self.left if side == "left" else self.right
         drives = get_drives()
+        if not drives: return
+
         top = tk.Toplevel(self)
-        top.title("ドライブ変更")
+        top.title(f"ドライブ変更 ({'左' if side == 'left' else '右'})")
         top.resizable(False, False)
+        top.transient(self)
+
+        lb = tk.Listbox(top, font=("Meiryo UI", 10),
+                        selectmode="single", exportselection=False,
+                        selectbackground=C["cursor_bg"],
+                        selectforeground=C["cursor_fg"],
+                        activestyle="none",
+                        width=30, height=min(len(drives), 12))
         for d in drives:
             free_k, _ = disk_free(d + "\\")
-            tk.Button(top, text=f"{d}  ({free_k:,} k free)",
-                width=22, anchor="w",
-                font=("Meiryo UI", 9),
-                command=lambda dr=d, p=panel, t=top: (p.goto(dr + "\\"), t.destroy())
-            ).pack(padx=10, pady=2)
-        top.bind("<Escape>", lambda _: top.destroy())
+            lb.insert(tk.END, f"  {d}  ({free_k:,} k free)")
+        lb.selection_set(0)
+        lb.activate(0)
+        lb.pack(padx=8, pady=8)
+
+        def go(_=None):
+            sel = lb.curselection()
+            idx = sel[0] if sel else lb.index(tk.ACTIVE)
+            d = drives[idx]
+            top.destroy()
+            panel.goto(d + "\\")
+            panel.tree.focus_set()
+
+        def sync_sel(e=None):
+            lb.after(0, lambda: (
+                lb.selection_clear(0, tk.END),
+                lb.selection_set(lb.index(tk.ACTIVE))
+            ))
+
+        def jump_letter(event):
+            ch = event.char.upper()
+            if not ch.isalpha(): return
+            for i, d in enumerate(drives):
+                if d.upper().startswith(ch):
+                    lb.selection_clear(0, tk.END)
+                    lb.selection_set(i)
+                    lb.activate(i)
+                    lb.see(i)
+                    break
+            return "break"
+
+        lb.bind("<Up>",              sync_sel)
+        lb.bind("<Down>",            sync_sel)
+        lb.bind("<Return>",          go)
+        lb.bind("<Double-Button-1>", go)
+        lb.bind("<Key>",             jump_letter)
+        top.bind("<Escape>",         lambda _: top.destroy())
+        lb.focus_set()
         top.grab_set()
 
     def cmd_cd_tree(self):
