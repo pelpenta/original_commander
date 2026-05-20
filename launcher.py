@@ -465,12 +465,19 @@ class FilePanel(tk.Frame):
 
     def go_parent(self):
         zip_tmp = getattr(self, "_zip_tmp", None)
-        if zip_tmp and str(self.path) == zip_tmp:
-            origin = getattr(self, "_zip_origin", None)
-            self._zip_tmp = None
-            self._zip_origin = None
-            self.goto(origin or str(self.path.parent))
-            return
+        if zip_tmp:
+            try:
+                same = self.path.samefile(zip_tmp)
+            except OSError:
+                same = False
+                self._zip_tmp = None
+                self._zip_origin = None
+            if same:
+                origin = getattr(self, "_zip_origin", None)
+                self._zip_tmp = None
+                self._zip_origin = None
+                self.goto(origin or str(self.path.parent))
+                return
         p = self.path.parent
         if p != self.path: self.goto(p)
 
@@ -670,12 +677,15 @@ class FilePanel(tk.Frame):
 
     def _browse_zip(self, zip_path):
         """ZIPファイルをブラウズ (簡易実装 - 展開先を一時表示)"""
+        if Path(zip_path).suffix.lower() != ".zip":
+            open_file(Path(zip_path))
+            return
         import tempfile
         tmp = tempfile.mkdtemp(prefix="launcher_zip_")
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
-            self._zip_tmp    = tmp
+            self._zip_tmp    = str(Path(tmp).resolve())
             self._zip_origin = str(Path(zip_path).parent)
             self.goto(tmp)
         except Exception as ex:
