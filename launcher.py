@@ -5,10 +5,12 @@ original launcher - Total Commander 互換ファイルマネージャー (Python
 依存ライブラリ: 標準ライブラリのみ (tkinter)
 """
 import os, sys, shutil, stat, subprocess, string, time, json, re, zipfile, fnmatch
+import threading, queue
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+import ctypes  # Windows API (標準ライブラリ、全プラットフォームで利用可)
 
 # ── 設定 ────────────────────────────────────────────
 APP_NAME = "original launcher"
@@ -80,14 +82,14 @@ def fmt_date(ts):
 def _send_to_trash(path):
     """Windows: ごみ箱へ移動"""
     if sys.platform == "win32":
-        import ctypes
         class SHFILEOPSTRUCTW(ctypes.Structure):
             _fields_ = [("hwnd", ctypes.c_void_p), ("wFunc", ctypes.c_uint),
                         ("pFrom", ctypes.c_wchar_p), ("pTo", ctypes.c_wchar_p),
                         ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", ctypes.c_int),
                         ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", ctypes.c_wchar_p)]
         op = SHFILEOPSTRUCTW()
-        op.hwnd = None; op.wFunc = 3  # FO_DELETE
+        op.hwnd = None
+        op.wFunc = 3  # FO_DELETE
         op.pFrom = path + "\0\0"
         op.fFlags = 0x0040 | 0x0010  # FOF_ALLOWUNDO | FOF_NOCONFIRMATION
         ret = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
@@ -100,17 +102,11 @@ def fmt_attr(path):
     """TC準拠: rahs (読取専用/アーカイブ/隠し/システム)"""
     try:
         if sys.platform == "win32":
-            import ctypes
             fa = ctypes.windll.kernel32.GetFileAttributesW(str(path))
             if fa == -1: return "----"
-            r = "r" if fa & 0x01 else "-"   # READONLY
-            a = "a" if fa & 0x20 else "-"   # ARCHIVE
-            h = "h" if fa & 0x02 else "-"   # HIDDEN
-            s = "s" if fa & 0x04 else "-"   # SYSTEM
-            return r + a + h + s
-        else:
-            ro = not os.access(path, os.W_OK)
-            return ("r" if ro else "-") + "---"
+            return ("r" if fa & 0x01 else "-") + ("a" if fa & 0x20 else "-") + \
+                   ("h" if fa & 0x02 else "-") + ("s" if fa & 0x04 else "-")
+        return ("r" if not os.access(path, os.W_OK) else "-") + "---"
     except: return "----"
 
 def disk_free(path):
@@ -129,7 +125,6 @@ def list_dir(path, show_hidden=True):
                 st = e.stat(follow_symlinks=False)
                 if not show_hidden:
                     if sys.platform == "win32":
-                        import ctypes
                         fa = ctypes.windll.kernel32.GetFileAttributesW(e.path)
                         if fa != -1 and (fa & 0x02): continue
                     elif e.name.startswith("."): continue
@@ -158,7 +153,6 @@ def sort_entries(entries, col="name", rev=False):
 
 def get_drives():
     if sys.platform != "win32": return ["/"]
-    import ctypes
     bm = ctypes.windll.kernel32.GetLogicalDrives()
     return [f"{c}:" for i, c in enumerate(string.ascii_uppercase) if bm & (1 << i)]
 
@@ -367,10 +361,16 @@ class FilePanel(tk.Frame):
                 is_sel = bool(e.state & 0x1) and d in ("up", "down")
                 if getattr(self, "_key_repeat_dir", None) != d:
                     # 初回押下 (または方向転換): 即時移動してタイマー開始
+                    prev_shift_dir = getattr(self, "_shift_sel_dir", None)
                     self._stop_key_repeat()
                     self._key_repeat_dir = d
                     self._key_repeat_sel = is_sel
-                    self._do_nav(d, is_sel)
+                    # Shift選択中に方向が逆転した場合、先端行のトグルをスキップする
+                    is_reversing = is_sel and prev_shift_dir is not None and (
+                        (prev_shift_dir == "up" and d == "down") or
+                        (prev_shift_dir == "down" and d == "up")
+                    )
+                    self._do_nav(d, is_sel, is_reversing)
                     delay = self.app.cfg.get("key_repeat_delay", 150)
                     self._key_repeat_job = self.tree.after(delay, self._tick_key_repeat)
                 # else: OS リピートイベントは無視 (タイマーが処理中)
@@ -692,8 +692,8 @@ class FilePanel(tk.Frame):
 
     # ── ヘッダークリック (ソート) ──
     def _click_header(self, col):
-        if self.sort_col == col: self.sort_rev = not self.sort_rev
-        else: self.sort_col = col; self.sort_rev = False
+        self.sort_rev = not self.sort_rev if self.sort_col == col else False
+        self.sort_col = col
         for c, *_ in self.COLS:
             self.tree.heading(c, text=self._header_text(c))
         self.refresh()
@@ -739,15 +739,17 @@ class FilePanel(tk.Frame):
                    "end":  total - 1}.get(direction, pos)
         self._set_cursor("__up__" if new_pos == 0 else str(new_pos - 1))
 
-    def move_cursor_select(self, direction):
+    def move_cursor_select(self, direction, is_reversing=False):
         """Shift+↑↓: 現在行の選択をトグルしてからカーソル移動 (TC互換範囲選択)"""
-        self.toggle_select(self.cursor_iid(), advance=False)
+        if not is_reversing:
+            self.toggle_select(self.cursor_iid(), advance=False)
+        self._shift_sel_dir = direction
         self.move_cursor(direction)
 
     # --- キーリピート (after タイマー制御) ---
-    def _do_nav(self, d, is_sel):
+    def _do_nav(self, d, is_sel, is_reversing=False):
         if is_sel:
-            self.move_cursor_select(d)
+            self.move_cursor_select(d, is_reversing)
         else:
             self.move_cursor(d)
 
@@ -781,6 +783,7 @@ class FilePanel(tk.Frame):
             self.tree.after_cancel(job)
             self._key_repeat_job = None
         self._key_repeat_dir = None
+        self._shift_sel_dir = None
 
     def enter_cursor(self):
         iid = self.cursor_iid()
@@ -1085,6 +1088,136 @@ class CopyMoveDialog(_BaseDialog):
         self.bind("<Return>", lambda e: self._ok() or "break")
         self.wait_window()
     def _ok(self): self.result = self.var.get(); self.destroy()
+
+class CopyProgressDialog(tk.Toplevel):
+    """コピー/移動の進行状況ダイアログ。バックグラウンドスレッドで実行し、完了時に自動で閉じる。"""
+    _CHUNK = 4 * 1024 * 1024  # 4MB
+
+    def __init__(self, master, sources: list, dest: Path, move=False):
+        super().__init__(master)
+        self.title("移動中..." if move else "コピー中...")
+        self.resizable(False, False)
+        self.grab_set()
+        self.errors = []
+        self._cancelled = False
+        self._q = queue.SimpleQueue()
+        self._build_ui()
+        threading.Thread(target=self._worker, args=(sources, dest, move), daemon=True).start()
+        self._tick()
+        self.wait_window()
+
+    def _build_ui(self):
+        fr = tk.Frame(self)
+        fr.pack(padx=16, pady=12, fill="x")
+        self._lbl_name  = tk.Label(fr, text="準備中...", font=("Meiryo UI", 9),
+                                    width=52, anchor="w")
+        self._lbl_name.pack(fill="x")
+        self._lbl_fpct  = tk.Label(fr, text="", font=("Meiryo UI", 8), anchor="w")
+        self._lbl_fpct.pack(fill="x")
+        self._bar_file  = ttk.Progressbar(fr, length=440, mode="determinate")
+        self._bar_file.pack(fill="x", pady=(2, 8))
+        self._lbl_total = tk.Label(fr, text="", font=("Meiryo UI", 8), anchor="w")
+        self._lbl_total.pack(fill="x")
+        self._bar_total = ttk.Progressbar(fr, length=440, mode="determinate")
+        self._bar_total.pack(fill="x", pady=2)
+        tk.Button(self, text="キャンセル", width=12,
+                  command=self._cancel).pack(pady=(6, 12))
+
+    def _cancel(self):
+        self._cancelled = True
+
+    def _worker(self, sources: list, dest: Path, move: bool):
+        # ファイル一覧を展開
+        pairs = []  # (src, dst)
+        for s in sources:
+            d = dest / s.name
+            if s.is_dir():
+                for f in sorted(s.rglob("*")):
+                    if f.is_file() and not self._cancelled:
+                        pairs.append((f, d / f.relative_to(s)))
+            else:
+                pairs.append((s, d))
+
+        total_sz = sum(src.stat().st_size for src, _ in pairs)
+        done_sz  = 0
+        n = len(pairs)
+
+        for i, (src, dst) in enumerate(pairs):
+            if self._cancelled:
+                break
+            self._q.put(("file", src.name, i, n))
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                sz = src.stat().st_size
+                if move:
+                    try:
+                        os.rename(str(src), str(dst))  # 同一FSなら瞬時にリネーム
+                        done_sz += sz
+                        self._q.put(("prog", sz, sz, done_sz, total_sz))
+                        continue
+                    except OSError:
+                        pass  # クロスドライブ移動 → チャンクコピーにフォールバック
+                copied = self._copy_chunk(src, dst, sz, done_sz, total_sz)
+                done_sz += copied
+                if move and not self._cancelled:
+                    try: src.unlink()
+                    except: pass
+            except Exception as ex:
+                self.errors.append(f"{src.name}: {ex}")
+
+        # 移動後: 空になったソースディレクトリを削除
+        if move and not self._cancelled:
+            for s in sources:
+                if s.is_dir() and s.exists():
+                    try: shutil.rmtree(str(s))
+                    except: pass
+
+        self._q.put(("done",))
+
+    def _copy_chunk(self, src: Path, dst: Path, sz: int, base: int, total: int) -> int:
+        done = 0
+        try:
+            with open(src, "rb") as rf, open(dst, "wb") as wf:
+                while not self._cancelled:
+                    buf = rf.read(self._CHUNK)
+                    if not buf:
+                        break
+                    wf.write(buf)
+                    done += len(buf)
+                    self._q.put(("prog", done, sz, base + done, total))
+        finally:
+            if self._cancelled and dst.exists() and done < sz:
+                try: dst.unlink()  # 中断時は中途半端なファイルを削除
+                except: pass
+        try: shutil.copystat(str(src), str(dst))
+        except: pass
+        return done
+
+    def _tick(self):
+        """メインスレッドでキューを定期確認してUI更新 (50ms間隔)"""
+        try:
+            while True:
+                msg = self._q.get_nowait()
+                if msg[0] == "file":
+                    _, name, idx, n = msg
+                    self._lbl_name.config(text=name)
+                    self._lbl_total.config(text=f"{idx + 1} / {n} ファイル")
+                    self._bar_file["value"] = 0
+                    self._lbl_fpct.config(text="")
+                elif msg[0] == "prog":
+                    _, fd, fsz, td, tsz = msg
+                    fp = fd / fsz * 100 if fsz else 100
+                    tp = td / tsz * 100 if tsz else 0
+                    self._bar_file["value"]  = fp
+                    self._bar_total["value"] = tp
+                    self._lbl_fpct.config(
+                        text=f"{fp:.0f}%  {fmt_size(fd)} / {fmt_size(fsz)}")
+                elif msg[0] == "done":
+                    self.destroy()
+                    return
+        except queue.Empty:
+            pass
+        self.after(50, self._tick)
 
 class RenameDialog(_BaseDialog):
     def __init__(self, master, name):
@@ -1562,8 +1695,8 @@ class App(tk.Tk):
         c.add_command(label="一括リネーム   Ctrl+M",      command=self.cmd_multi_rename)
         c.add_command(label="ディレクトリホットリスト  Ctrl+D", command=self.cmd_hotlist)
         c.add_separator()
-        c.add_command(label="コマンドプロンプト",         command=self.cmd_terminal)
-        c.add_command(label="コマンドプロンプト (PowerShell)", command=self.cmd_terminal_ps)
+        c.add_command(label="コマンドプロンプト",                      command=self.cmd_terminal)
+        c.add_command(label="PowerShell   Ctrl+Shift+Enter",           command=self.cmd_terminal_ps)
         c.add_separator()
         c.add_command(label="ソース<->ターゲット  Ctrl+U", command=self.cmd_exchange)
         c.add_command(label="ターゲット=ソース  Ctrl+I",   command=self.cmd_match_src)
@@ -1765,7 +1898,8 @@ class App(tk.Tk):
         ba("<F2>",  lambda e: self.ap.refresh())
         ba("<F3>",  lambda e: self.cmd_view())
         ba("<F4>",  lambda e: self.cmd_edit())
-        ba("<Control-Return>", lambda e: self.cmd_vscode() or "break")
+        ba("<Control-Return>",       lambda e: self.cmd_vscode() or "break")
+        ba("<Control-Shift-Return>", lambda e: self.cmd_terminal_ps() or "break")
         ba("<F5>",  lambda e: self.cmd_copy())
         ba("<F6>",  lambda e: self.cmd_move())
         ba("<F7>",  lambda e: self.cmd_mkdir())
@@ -1792,36 +1926,29 @@ class App(tk.Tk):
         ba("<Control-F5>", lambda e: self.cmd_sort("date"))
         ba("<Control-F6>", lambda e: self.cmd_sort("size"))
         ba("<Control-F7>", lambda e: self.cmd_sort("name"))  # unsorted -> name
-        # Ctrl+文字
-        ba("<Control-a>", lambda e: self.ap.select_all())
-        ba("<Control-A>", lambda e: self.ap.select_all())
-        ba("<Control-b>", lambda e: self.cmd_branch())
-        ba("<Control-d>", lambda e: self.cmd_hotlist())
-        ba("<Control-D>", lambda e: self.cmd_hotlist())
-        ba("<Control-i>", lambda e: self.cmd_match_src())
-        ba("<Control-I>", lambda e: self.cmd_match_src())
-        ba("<Control-m>", lambda e: self.cmd_multi_rename())
-        ba("<Control-M>", lambda e: self.cmd_multi_rename())
-        ba("<Control-r>", lambda e: self.ap.refresh())
-        ba("<Control-R>", lambda e: self.ap.refresh())
-        ba("<Control-s>", lambda e: self.cmd_quick_filter())
-        ba("<Control-S>", lambda e: self.cmd_quick_filter())
-        ba("<Control-t>", lambda e: self.ap.new_tab())
-        ba("<Control-T>", lambda e: self.ap.new_tab())
-        ba("<Control-u>", lambda e: self.cmd_exchange())
-        ba("<Control-U>", lambda e: self.cmd_exchange())
-        ba("<Control-w>", lambda e: self.ap.close_tab())
-        ba("<Control-W>", lambda e: self.ap.close_tab())
+        # Ctrl+文字 (大文字小文字両方登録)
+        for _ch, _fn in [
+            ("a", lambda: self.ap.select_all()),
+            ("d", lambda: self.cmd_hotlist()),
+            ("i", lambda: self.cmd_match_src()),
+            ("l", lambda: self._focus_pathbar()),
+            ("m", lambda: self.cmd_multi_rename()),
+            ("r", lambda: self.ap.refresh()),
+            ("s", lambda: self.cmd_quick_filter()),
+            ("t", lambda: self.ap.new_tab()),
+            ("u", lambda: self.cmd_exchange()),
+            ("w", lambda: self.ap.close_tab()),
+        ]:
+            ba(f"<Control-{_ch}>",         lambda e, f=_fn: f())
+            ba(f"<Control-{_ch.upper()}>", lambda e, f=_fn: f())
+        ba("<Control-b>",           lambda e: self.cmd_branch())
         ba("<Control-Tab>",         lambda e: self._next_tab())
         ba("<Control-Shift-Tab>",   lambda e: self._prev_tab())
         ba("<Control-BackSpace>",   lambda e: self._key_go_parent(e))
         ba("<Control-Prior>",       lambda e: self._key_go_parent(e))
         ba("<Control-backslash>",   lambda e: self.ap.go_root())
-        # Ctrl+↓/↑ : コマンドライン操作
-        ba("<Control-Down>", lambda e: self._focus_cmdline())
-        ba("<Control-Up>",   lambda e: self._copy_name_to_cmdline())
-        ba("<Control-l>",    lambda e: self._focus_pathbar())
-        ba("<Control-L>",    lambda e: self._focus_pathbar())
+        ba("<Control-Down>",        lambda e: self._focus_cmdline())
+        ba("<Control-Up>",          lambda e: self._copy_name_to_cmdline())
         # Alt+方向キー
         ba("<Alt-Left>",   lambda e: self.cmd_back())
         ba("<Alt-Right>",  lambda e: self.cmd_forward())
@@ -2038,7 +2165,7 @@ class App(tk.Tk):
         except Exception as ex: messagebox.showerror("エラー", str(ex))
 
     def _do_copy_move(self, move=False):
-        src_panel = self.ap   # ダイアログ表示前に固定 (フォーカス移動で _active_side がずれても安全)
+        src_panel = self.ap  # ダイアログ表示前に固定 (フォーカス移動で _active_side がずれても安全)
         dst_panel = self.ip
         srcs = src_panel.selected_paths()
         if not srcs: return
@@ -2048,21 +2175,11 @@ class App(tk.Tk):
         if not dest.exists():
             try: dest.mkdir(parents=True)
             except Exception as ex: messagebox.showerror("エラー", str(ex)); return
-        errs = []
-        for s in srcs:
-            self.title(f"{APP_NAME} — {'移動' if move else 'コピー'}中: {s.name}")
-            self.update_idletasks()
-            try:
-                d = dest / s.name
-                if s.is_dir():
-                    shutil.move(str(s), str(d)) if move else shutil.copytree(str(s), str(d), dirs_exist_ok=True)
-                else:
-                    shutil.move(str(s), str(d)) if move else shutil.copy2(str(s), str(d))
-            except Exception as ex: errs.append(f"{s.name}: {ex}")
-        self.title(APP_NAME)
+        prog = CopyProgressDialog(self, srcs, dest, move=move)
         src_panel.refresh(); dst_panel.refresh()
         src_panel.deselect_all()
-        if errs: messagebox.showerror("エラー", "\n".join(errs[:10]))
+        if prog.errors:
+            messagebox.showerror("エラー", "\n".join(prog.errors[:10]))
 
     def cmd_copy(self): self._do_copy_move(move=False)
     def cmd_move(self): self._do_copy_move(move=True)
@@ -2412,8 +2529,30 @@ class App(tk.Tk):
         except Exception as ex: messagebox.showerror("エラー", str(ex))
 
     def cmd_terminal_ps(self):
-        try: subprocess.Popen(["powershell.exe"], cwd=str(self.ap.path))
-        except Exception as ex: messagebox.showerror("エラー", str(ex))
+        cwd = str(self.ap.path)
+        venv_bases = self.cfg.get("venv_bases", [])
+        activate_ps1 = None
+
+        if venv_bases:
+            dlg = VenvSelectDialog(self, venv_bases)
+            if dlg.result is None:
+                return
+            if dlg.result is not False:
+                ps1 = dlg.result.parent / "Activate.ps1"
+                if ps1.exists():
+                    activate_ps1 = ps1
+
+        try:
+            if activate_ps1:
+                subprocess.Popen(
+                    ["powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass",
+                     "-Command", f". '{activate_ps1}'"],
+                    cwd=cwd
+                )
+            else:
+                subprocess.Popen(["powershell.exe"], cwd=cwd)
+        except Exception as ex:
+            messagebox.showerror("エラー", str(ex))
 
     def cmd_cfg_location(self):
         """設定ファイルの保存先フォルダを変更する"""

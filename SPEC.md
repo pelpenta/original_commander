@@ -35,10 +35,11 @@ launcher/
 |---|---|
 | `App(tk.Tk)` | メインウィンドウ。キーバインド・コマンド・メニュー管理 |
 | `FilePanel(tk.Frame)` | 左右どちらかのパネル。ファイルリスト表示・操作 |
-| `VenvSelectDialog` | VSCode起動時のvenv選択ダイアログ |
+| `VenvSelectDialog` | VSCode/PowerShell起動時のvenv選択ダイアログ |
 | `VenvBasesDialog` | venvベースパス設定ダイアログ |
 | `_BaseDialog` | モーダルダイアログ基底クラス |
-| `CopyMoveDialog` | F5コピー/F6移動ダイアログ |
+| `CopyMoveDialog` | F5コピー/F6移動のコピー先入力ダイアログ |
+| `CopyProgressDialog` | コピー/移動の進行状況ダイアログ (バックグラウンドスレッド実行、完了時に自動クローズ) |
 | `RenameDialog` | Shift+F6リネームダイアログ |
 | `MkdirDialog` | F7新規ディレクトリダイアログ |
 | `FindDialog` | Alt+F7ファイル検索ダイアログ |
@@ -253,9 +254,11 @@ def _is_input(self, event):
 | F6 | 移動/リネーム |
 | F7 | 新規ディレクトリ (カレントディレクトリに作成) |
 | F8 / Delete | 削除 (ごみ箱) |
+| Shift+F2 | ディレクトリ比較 |
 | Shift+F4 | 新規ファイル作成・編集 |
 | Shift+F5 | 同ディレクトリにコピー |
 | Shift+F6 | リネーム |
+| Shift+F10 | コンテキストメニュー (キーボード) |
 | Alt+F5 | ZIP圧縮 |
 | Alt+F7 | ファイル検索 |
 | Tab | パネル切替 |
@@ -264,20 +267,28 @@ def _is_input(self, event):
 | Num+ / Num- | パターン選択/解除 |
 | Num* | 選択反転 |
 | Num/ | 保存選択を復元 |
-| Alt+Num+ | 同拡張子を選択 |
+| Alt+Num+ / Alt+Num- | 同拡張子を選択/解除 |
 | Ctrl+T | 新規タブ |
 | Ctrl+W | タブを閉じる |
 | Ctrl+Tab | 次タブ |
 | Ctrl+U | 左右交換 |
+| Ctrl+I | ターゲット=ソース |
 | Ctrl+B | ブランチビュー |
 | Ctrl+D | ホットリスト |
 | Ctrl+M | 一括リネーム |
 | Ctrl+R | 再読み込み |
+| Ctrl+S | クイックフィルター |
 | Ctrl+F1/F2 | 簡易/詳細表示 |
 | Ctrl+F3〜F6 | ソート |
-| Ctrl+S | クイックフィルター |
-| Ctrl+Enter | VSCodeで開く |
+| Ctrl+L | アドレスバーへフォーカス |
+| Ctrl+Down | コマンドラインへフォーカス |
+| Ctrl+Up | ファイル名をコマンドラインにコピー |
+| Ctrl+Enter | VSCodeで開く (venv対応) |
+| Ctrl+Shift+Enter | PowerShellで開く (venv対応) |
+| Ctrl+BackSpace / Ctrl+PageUp | 親ディレクトリへ |
+| Ctrl+\ | ルートへ移動 |
 | Alt+Left/Right | 戻る/進む |
+| Alt+Down | 履歴ポップアップ |
 | Alt+F10 | ディレクトリツリー |
 | Alt+Enter | プロパティ |
 | Alt+F1/F2 | ドライブ変更 |
@@ -313,6 +324,16 @@ TC互換のポップアップメニューとして実装。`HotlistMenu` は `ov
   - `VenvSelectDialog` を表示し、仮想環境を選択できる
   - 選択すると `call activate.bat && code <dir>` を実行
   - "venvなしで開く" を選択した場合は通常起動
+
+## PowerShell 連携 (Ctrl+Shift+Enter)
+
+アクティブパネルのカレントディレクトリで `powershell.exe` を起動する。
+
+- `venv_bases` が設定済みの場合:
+  - `VenvSelectDialog` を表示し、仮想環境を選択できる
+  - 選択すると `-ExecutionPolicy Bypass -Command ". Activate.ps1"` で venv を activate して起動
+  - "venvなしで開く" を選択した場合は通常起動
+- カレントディレクトリは `cwd` 引数で引き継がれる
 
 ---
 
