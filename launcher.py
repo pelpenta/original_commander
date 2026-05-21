@@ -1213,6 +1213,7 @@ class CopyProgressDialog(tk.Toplevel):
                     self._lbl_fpct.config(
                         text=f"{fp:.0f}%  {fmt_size(fd)} / {fmt_size(fsz)}")
                 elif msg[0] == "done":
+                    self.master.focus_force()
                     self.destroy()
                     return
         except queue.Empty:
