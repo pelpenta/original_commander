@@ -1100,6 +1100,10 @@ class CopyProgressDialog(tk.Toplevel):
         self.grab_set()
         self.errors = []
         self._cancelled = False
+        self._overwrite_all = False
+        self._skip_all = False
+        self._confirm_event = threading.Event()
+        self._confirm_result = None
         self._q = queue.SimpleQueue()
         self._build_ui()
         threading.Thread(target=self._worker, args=(sources, dest, move), daemon=True).start()
@@ -1125,9 +1129,31 @@ class CopyProgressDialog(tk.Toplevel):
 
     def _cancel(self):
         self._cancelled = True
+        self._confirm_result = "cancel"
+        self._confirm_event.set()
+
+    # ── ワーカースレッド側 ──────────────────────────────────────────────────
+
+    def _resolve_conflict(self, src: Path, dst: Path) -> str:
+        """同名ファイルが存在する場合の処理を決定する (ワーカースレッドから呼ぶ)。"""
+        if self._skip_all:      return "skip"
+        if self._overwrite_all: return "overwrite"
+        st_src, st_dst = src.stat(), dst.stat()
+        self._q.put(("overwrite?", src.name,
+                     st_src.st_mtime, st_src.st_size,
+                     st_dst.st_mtime, st_dst.st_size))
+        self._confirm_event.wait()
+        self._confirm_event.clear()
+        result = self._confirm_result
+        if result == "overwrite_all":
+            self._overwrite_all = True; return "overwrite"
+        if result == "skip_all":
+            self._skip_all = True; return "skip"
+        if result == "cancel":
+            self._cancelled = True; return "cancel"
+        return result  # "overwrite" / "skip"
 
     def _worker(self, sources: list, dest: Path, move: bool):
-        # ファイル一覧を展開
         pairs = []  # (src, dst)
         for s in sources:
             d = dest / s.name
@@ -1149,14 +1175,22 @@ class CopyProgressDialog(tk.Toplevel):
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 sz = src.stat().st_size
+
+                # 上書き確認
+                if dst.exists():
+                    action = self._resolve_conflict(src, dst)
+                    if action == "skip":    continue
+                    if action == "cancel":  break
+
                 if move:
                     try:
-                        os.rename(str(src), str(dst))  # 同一FSなら瞬時にリネーム
+                        if dst.exists(): dst.unlink()  # rename前に既存ファイルを削除
+                        os.rename(str(src), str(dst))
                         done_sz += sz
                         self._q.put(("prog", sz, sz, done_sz, total_sz))
                         continue
                     except OSError:
-                        pass  # クロスドライブ移動 → チャンクコピーにフォールバック
+                        pass  # クロスドライブ → チャンクコピーにフォールバック
                 copied = self._copy_chunk(src, dst, sz, done_sz, total_sz)
                 done_sz += copied
                 if move and not self._cancelled:
@@ -1165,7 +1199,6 @@ class CopyProgressDialog(tk.Toplevel):
             except Exception as ex:
                 self.errors.append(f"{src.name}: {ex}")
 
-        # 移動後: 空になったソースディレクトリを削除
         if move and not self._cancelled:
             for s in sources:
                 if s.is_dir() and s.exists():
@@ -1187,11 +1220,59 @@ class CopyProgressDialog(tk.Toplevel):
                     self._q.put(("prog", done, sz, base + done, total))
         finally:
             if self._cancelled and dst.exists() and done < sz:
-                try: dst.unlink()  # 中断時は中途半端なファイルを削除
+                try: dst.unlink()
                 except: pass
         try: shutil.copystat(str(src), str(dst))
         except: pass
         return done
+
+    # ── メインスレッド側 ───────────────────────────────────────────────────
+
+    def _ask_overwrite(self, name: str, smtime: float, ssz: int,
+                       dmtime: float, dsz: int):
+        """上書き確認ダイアログを表示し、ユーザー選択をワーカーに通知する。"""
+        dlg = tk.Toplevel(self)
+        dlg.title("上書き確認")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        def fmt_info(mtime, sz):
+            return f"{datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}  {fmt_size(sz)}"
+
+        tk.Label(dlg, text=f"「{name}」は既に存在します。",
+                 font=("Meiryo UI", 9, "bold")).pack(padx=16, pady=(12, 4))
+
+        info_fr = tk.Frame(dlg)
+        info_fr.pack(padx=16, pady=4, fill="x")
+        for row, (label, val) in enumerate([
+            ("既存ファイル:", fmt_info(dmtime, dsz)),
+            ("コピー元:",     fmt_info(smtime, ssz)),
+        ]):
+            tk.Label(info_fr, text=label, font=("Meiryo UI", 8),
+                     anchor="w", width=12).grid(row=row, column=0, sticky="w")
+            tk.Label(info_fr, text=val,   font=("Meiryo UI", 8),
+                     anchor="w").grid(row=row, column=1, sticky="w", padx=4)
+
+        btn_fr = tk.Frame(dlg)
+        btn_fr.pack(pady=(8, 12))
+
+        def respond(r):
+            self._confirm_result = r
+            dlg.destroy()
+            self._confirm_event.set()
+
+        for text, result, width in [
+            ("上書き",       "overwrite",     10),
+            ("全て上書き",   "overwrite_all", 12),
+            ("スキップ",     "skip",          10),
+            ("全てスキップ", "skip_all",      12),
+            ("キャンセル",   "cancel",        10),
+        ]:
+            tk.Button(btn_fr, text=text, width=width,
+                      command=lambda r=result: respond(r)).pack(side="left", padx=3)
+
+        dlg.protocol("WM_DELETE_WINDOW", lambda: respond("cancel"))
+        dlg.wait_window()
 
     def _tick(self):
         """メインスレッドでキューを定期確認してUI更新 (50ms間隔)"""
@@ -1212,6 +1293,9 @@ class CopyProgressDialog(tk.Toplevel):
                     self._bar_total["value"] = tp
                     self._lbl_fpct.config(
                         text=f"{fp:.0f}%  {fmt_size(fd)} / {fmt_size(fsz)}")
+                elif msg[0] == "overwrite?":
+                    _, name, smtime, ssz, dmtime, dsz = msg
+                    self._ask_overwrite(name, smtime, ssz, dmtime, dsz)
                 elif msg[0] == "done":
                     self.master.focus_force()
                     self.destroy()
